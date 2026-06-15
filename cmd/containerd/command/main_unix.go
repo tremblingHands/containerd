@@ -21,6 +21,7 @@ package command
 import (
 	"context"
 	"os"
+	"runtime"
 
 	"github.com/containerd/containerd/v2/cmd/containerd/server"
 	"github.com/containerd/log"
@@ -32,6 +33,11 @@ var handledSignals = []os.Signal{
 	unix.SIGINT,
 	unix.SIGUSR1,
 	unix.SIGPIPE,
+}
+
+func init() {
+	runtime.SetBlockProfileRate(1)
+	runtime.SetMutexProfileFraction(5)
 }
 
 func handleSignals(ctx context.Context, signals chan os.Signal, serverC chan *server.Server, cancel func()) chan struct{} {
