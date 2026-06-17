@@ -97,19 +97,27 @@ func StartSpan(ctx context.Context, opName string, opts ...SpanOpt) (context.Con
 	for _, fn := range opts {
 		fn(&config)
 	}
-	tracer := otel.Tracer("")
+
+	// Capture parent span ID before creating the child span.
+	var parentSpanID trace.SpanID
 	if parent := trace.SpanFromContext(ctx); parent != nil && parent.SpanContext().IsValid() {
-		tracer = parent.TracerProvider().Tracer("")
+		parentSpanID = parent.SpanContext().SpanID()
+	}
+
+	tracer := otel.Tracer("")
+	if parentSpanID.IsValid() {
+		tracer = trace.SpanFromContext(ctx).TracerProvider().Tracer("")
 	}
 	ctx, span := tracer.Start(ctx, opName, config.spanOpts...)
 
 	// Format attributes for stderr output
 	attrStr := formatAttrs(config.attrs)
 
-	fmt.Fprintf(os.Stderr, "[TRACE] start name=%q trace=%s span=%s%s\n",
+	fmt.Fprintf(os.Stderr, "[TRACE] start name=%q trace=%s span=%s parent=%s%s\n",
 		opName,
 		span.SpanContext().TraceID(),
 		span.SpanContext().SpanID(),
+		parentSpanID,
 		attrStr)
 
 	return ctx, &Span{
