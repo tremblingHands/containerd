@@ -18,22 +18,26 @@ package tracing
 
 import (
 	"context"
-	"net/http"
-	"strings"
 	"fmt"
+	"net/http"
 	"os"
+	"strings"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 )
 
 // StartConfig defines configuration for a new span object.
 type StartConfig struct {
 	spanOpts []trace.SpanStartOption
+	attrs    []attribute.KeyValue
 }
 
 type SpanOpt func(config *StartConfig)
@@ -41,9 +45,38 @@ type SpanOpt func(config *StartConfig)
 // WithAttribute appends attributes to a new created span.
 func WithAttribute(k string, v any) SpanOpt {
 	return func(config *StartConfig) {
-		config.spanOpts = append(config.spanOpts,
-			trace.WithAttributes(Attribute(k, v)))
+		attr := Attribute(k, v)
+		config.spanOpts = append(config.spanOpts, trace.WithAttributes(attr))
+		config.attrs = append(config.attrs, attr)
 	}
+}
+
+// initTP guards lazy initialization of a default TracerProvider
+// when the OTLP tracing plugin has not been loaded.
+var initTP sync.Once
+
+// ensureTracerProvider ensures a valid TracerProvider is set globally.
+// When the OTLP tracing plugin is skipped (no endpoint configured), the
+// default no-op TracerProvider generates zero trace/span IDs. This function
+// installs an SDK TracerProvider that generates valid random IDs, so that
+// [TRACE] log output and the logrus trace_id field are useful even without
+// an exporter.
+func ensureTracerProvider() {
+	initTP.Do(func() {
+		// If a proper TracerProvider is already configured (e.g. by the
+		// OTLP tracing plugin), the span context will be valid — skip.
+		tracer := otel.Tracer("")
+		_, span := tracer.Start(context.Background(), "_ensure_tp")
+		defer span.End()
+		if span.SpanContext().IsValid() {
+			return
+		}
+		// No valid provider — install a default SDK TracerProvider.
+		otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+			propagation.TraceContext{}, propagation.Baggage{},
+		))
+		otel.SetTracerProvider(sdktrace.NewTracerProvider())
+	})
 }
 
 // UpdateHTTPClient updates the http client with the necessary otel transport
@@ -58,6 +91,8 @@ func UpdateHTTPClient(client *http.Client, name string) {
 
 // StartSpan starts child span in a context.
 func StartSpan(ctx context.Context, opName string, opts ...SpanOpt) (context.Context, *Span) {
+	ensureTracerProvider()
+
 	config := StartConfig{}
 	for _, fn := range opts {
 		fn(&config)
@@ -68,15 +103,20 @@ func StartSpan(ctx context.Context, opName string, opts ...SpanOpt) (context.Con
 	}
 	ctx, span := tracer.Start(ctx, opName, config.spanOpts...)
 
-	fmt.Fprintf(os.Stderr, "[TRACE] start name=%q trace=%s span=%s\n",
+	// Format attributes for stderr output
+	attrStr := formatAttrs(config.attrs)
+
+	fmt.Fprintf(os.Stderr, "[TRACE] start name=%q trace=%s span=%s%s\n",
 		opName,
 		span.SpanContext().TraceID(),
-		span.SpanContext().SpanID())
+		span.SpanContext().SpanID(),
+		attrStr)
 
 	return ctx, &Span{
 		otelSpan: span,
 		opName:   opName,
 		start:    time.Now(),
+		attrs:    config.attrs,
 	}
 }
 
@@ -94,6 +134,7 @@ type Span struct {
 	otelSpan trace.Span
 	opName   string
 	start    time.Time
+	attrs    []attribute.KeyValue
 }
 
 // End completes the span.
@@ -109,8 +150,9 @@ func (s *Span) End() {
 	if name == "" {
 		name = "<unknown>"
 	}
-	fmt.Fprintf(os.Stderr, "[TRACE] end name=%q trace=%s span=%s dur=%s\n",
-		name, traceID, spanID, dur)
+	attrStr := formatAttrs(s.attrs)
+	fmt.Fprintf(os.Stderr, "[TRACE] end name=%q trace=%s span=%s dur=%s%s\n",
+		name, traceID, spanID, dur, attrStr)
 }
 
 // AddEvent adds an event with provided name and options.
@@ -158,4 +200,21 @@ func HTTPStatusCodeAttributes(code int) []attribute.KeyValue {
 		attribute.Int("http.response.status_code", code),
 		attribute.Int("http.status_code", code), // Deprecated: SemConv <= v1.21
 	}
+}
+
+// formatAttrs formats a slice of attribute.KeyValue as a space-prefixed
+// string of key=value pairs suitable for [TRACE] log output.
+// Returns an empty string if attrs is empty.
+func formatAttrs(attrs []attribute.KeyValue) string {
+	if len(attrs) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, attr := range attrs {
+		b.WriteString(" ")
+		b.WriteString(string(attr.Key))
+		b.WriteString("=")
+		b.WriteString(attr.Value.AsString())
+	}
+	return b.String()
 }

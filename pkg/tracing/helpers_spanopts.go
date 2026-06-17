@@ -31,8 +31,10 @@ func WithNamespace(ctx context.Context) SpanOpt {
 		if err != nil {
 			return
 		}
+		attr := Attribute("namespace", ns)
 		config.spanOpts = append(config.spanOpts,
-			trace.WithAttributes(Attribute("namespace", ns)),
+			trace.WithAttributes(attr),
 		)
+		config.attrs = append(config.attrs, attr)
 	}
 }
