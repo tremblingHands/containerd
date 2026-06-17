@@ -39,6 +39,7 @@ import (
 	"github.com/containerd/containerd/v2/core/runtime"
 	v2 "github.com/containerd/containerd/v2/core/runtime/v2"
 	"github.com/containerd/containerd/v2/core/sandbox"
+	"github.com/containerd/containerd/v2/pkg/tracing"
 	"github.com/containerd/containerd/v2/plugins"
 )
 
@@ -284,9 +285,25 @@ func (c *controllerLocal) Wait(ctx context.Context, sandboxID string) (sandbox.E
 	}, nil
 }
 
-func (c *controllerLocal) Status(ctx context.Context, sandboxID string, verbose bool) (sandbox.ControllerStatus, error) {
+func (c *controllerLocal) Status(ctx context.Context, sandboxID string, verbose bool) (status sandbox.ControllerStatus, retErr error) {
+	_, span := tracing.StartSpan(ctx, tracing.Name("sandbox", "controller", "local", "status"),
+		tracing.WithNamespace(ctx),
+	)
+	defer func() {
+		if retErr != nil {
+			span.RecordError(retErr)
+		}
+		span.End()
+	}()
+
+	span.SetAttributes(
+		tracing.Attribute("sandbox.id", sandboxID),
+		tracing.Attribute("sandbox.verbose", verbose),
+	)
+
 	svc, err := c.getSandbox(ctx, sandboxID)
 	if errdefs.IsNotFound(err) {
+		span.SetAttributes(tracing.Attribute("sandbox.shim.not_found", true))
 		return sandbox.ControllerStatus{
 			SandboxID: sandboxID,
 			ExitedAt:  time.Now(),
@@ -296,6 +313,7 @@ func (c *controllerLocal) Status(ctx context.Context, sandboxID string, verbose 
 		return sandbox.ControllerStatus{}, err
 	}
 
+	span.AddEvent("sandbox.status.shim_call")
 	resp, err := svc.SandboxStatus(ctx, &runtimeAPI.SandboxStatusRequest{
 		SandboxID: sandboxID,
 		Verbose:   verbose,
@@ -309,6 +327,12 @@ func (c *controllerLocal) Status(ctx context.Context, sandboxID string, verbose 
 		return sandbox.ControllerStatus{}, fmt.Errorf("unable to find sandbox %q", sandboxID)
 	}
 	address, version := shim.Endpoint()
+
+	span.SetAttributes(
+		tracing.Attribute("sandbox.shim.state", resp.GetState()),
+		tracing.Attribute("sandbox.shim.pid", resp.GetPid()),
+		tracing.Attribute("sandbox.shim.address", address),
+	)
 
 	return sandbox.ControllerStatus{
 		SandboxID: resp.GetSandboxID(),

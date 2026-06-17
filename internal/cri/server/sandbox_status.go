@@ -26,17 +26,33 @@ import (
 
 	podsandboxtypes "github.com/containerd/containerd/v2/internal/cri/server/podsandbox/types"
 	sandboxstore "github.com/containerd/containerd/v2/internal/cri/store/sandbox"
+	"github.com/containerd/containerd/v2/pkg/tracing"
 	"github.com/containerd/errdefs"
 )
 
 // PodSandboxStatus returns the status of the PodSandbox.
-func (c *criService) PodSandboxStatus(ctx context.Context, r *runtime.PodSandboxStatusRequest) (*runtime.PodSandboxStatusResponse, error) {
+func (c *criService) PodSandboxStatus(ctx context.Context, r *runtime.PodSandboxStatusRequest) (resp *runtime.PodSandboxStatusResponse, retErr error) {
+	ctx, span := tracing.StartSpan(ctx, tracing.Name("cri", "sandbox", "status"),
+		tracing.WithNamespace(ctx),
+	)
+	defer func() {
+		if retErr != nil {
+			span.RecordError(retErr)
+		}
+		span.End()
+	}()
+
 	sandbox, err := c.sandboxStore.Get(r.GetPodSandboxId())
 	if err != nil {
 		return nil, fmt.Errorf("an error occurred when try to find sandbox: %w", err)
 	}
 
-	ip, additionalIPs, err := c.getIPs(sandbox)
+	span.SetAttributes(
+		tracing.Attribute("sandbox.id", sandbox.ID),
+		tracing.Attribute("sandbox.verbose", r.GetVerbose()),
+	)
+
+	ip, additionalIPs, err := c.getIPs(ctx, sandbox)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get sandbox ip: %w", err)
 	}
@@ -48,6 +64,8 @@ func (c *criService) PodSandboxStatus(ctx context.Context, r *runtime.PodSandbox
 	)
 	cstatus, err := c.sandboxService.SandboxStatus(ctx, sandbox.Sandboxer, sandbox.ID, r.GetVerbose())
 	if err != nil {
+		span.AddEvent("sandbox.status.controller.error",
+			tracing.Attribute("sandbox.controller.error", err.Error()))
 		// If the shim died unexpectedly (segfault etc.) let's set the state as
 		// NOTREADY and not just error out to make k8s and clients like crictl
 		// happy. If we get back ErrNotFound from controller.Status above while
@@ -60,6 +78,7 @@ func (c *criService) PodSandboxStatus(ctx context.Context, r *runtime.PodSandbox
 			return nil, fmt.Errorf("failed to query controller status: %w", err)
 		}
 		state = runtime.PodSandboxState_SANDBOX_NOTREADY.String()
+		span.SetAttributes(tracing.Attribute("sandbox.state", state))
 		if r.GetVerbose() {
 			info, err = toDeletedCRISandboxInfo(sandbox)
 			if err != nil {
@@ -70,6 +89,11 @@ func (c *criService) PodSandboxStatus(ctx context.Context, r *runtime.PodSandbox
 		state = cstatus.State
 		createdAt = cstatus.CreatedAt
 		info = cstatus.Info
+		span.SetAttributes(
+			tracing.Attribute("sandbox.state", state),
+			tracing.Attribute("sandbox.pid", cstatus.Pid),
+			tracing.Attribute("sandbox.created_at", createdAt.UnixNano()),
+		)
 	}
 
 	if info == nil {
@@ -79,7 +103,7 @@ func (c *criService) PodSandboxStatus(ctx context.Context, r *runtime.PodSandbox
 		return nil, err
 	}
 
-	status := toCRISandboxStatus(sandbox.Metadata, state, createdAt, ip, additionalIPs)
+	status := toCRISandboxStatus(ctx, sandbox.Metadata, state, createdAt, ip, additionalIPs)
 	if status.GetCreatedAt() == 0 {
 		// CRI doesn't allow CreatedAt == 0.
 		sandboxInfo, err := c.client.SandboxStore().Get(ctx, sandbox.ID)
@@ -95,21 +119,32 @@ func (c *criService) PodSandboxStatus(ctx context.Context, r *runtime.PodSandbox
 	}, nil
 }
 
-func (c *criService) getIPs(sandbox sandboxstore.Sandbox) (string, []string, error) {
+func (c *criService) getIPs(ctx context.Context, sandbox sandboxstore.Sandbox) (string, []string, error) {
+	_, span := tracing.StartSpan(ctx, tracing.Name("cri", "sandbox", "status", "get_ips"),
+		tracing.WithNamespace(ctx),
+	)
+	defer span.End()
+
 	config := sandbox.Config
 
 	// For sandboxes using the node network we are not
 	// responsible for reporting the IP.
 	if hostNetwork(config) {
+		span.SetAttributes(tracing.Attribute("sandbox.host_network", true))
 		return "", nil, nil
 	}
 
 	if closed, err := sandbox.NetNS.Closed(); err != nil {
 		return "", nil, fmt.Errorf("check network namespace closed: %w", err)
 	} else if closed {
+		span.SetAttributes(tracing.Attribute("sandbox.netns.closed", true))
 		return "", nil, nil
 	}
 
+	span.SetAttributes(
+		tracing.Attribute("sandbox.ip", sandbox.IP),
+		tracing.Attribute("sandbox.additional_ips.count", len(sandbox.AdditionalIPs)),
+	)
 	return sandbox.IP, sandbox.AdditionalIPs, nil
 }
 
@@ -142,12 +177,21 @@ func setUpdatedResources(ctx context.Context, sandbox sandboxstore.Sandbox, info
 }
 
 // toCRISandboxStatus converts sandbox metadata into CRI pod sandbox status.
-func toCRISandboxStatus(meta sandboxstore.Metadata, status string, createdAt time.Time, ip string, additionalIPs []string) *runtime.PodSandboxStatus {
+func toCRISandboxStatus(ctx context.Context, meta sandboxstore.Metadata, status string, createdAt time.Time, ip string, additionalIPs []string) *runtime.PodSandboxStatus {
+	_, span := tracing.StartSpan(ctx, tracing.Name("cri", "sandbox", "status", "to_cri"),
+		tracing.WithNamespace(ctx),
+	)
+	defer span.End()
+
 	// Set sandbox state to NOTREADY by default.
 	state := runtime.PodSandboxState_SANDBOX_NOTREADY
 	if value, ok := runtime.PodSandboxState_value[status]; ok {
 		state = runtime.PodSandboxState(value)
 	}
+	span.SetAttributes(
+		tracing.Attribute("sandbox.cri_state", state.String()),
+		tracing.Attribute("sandbox.cri_input_state", status),
+	)
 	nsOpts := meta.Config.GetLinux().GetSecurityContext().GetNamespaceOptions()
 	var ips []*runtime.PodIP
 	for _, additionalIP := range additionalIPs {

@@ -26,6 +26,7 @@ import (
 	"github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/core/sandbox"
 	criconfig "github.com/containerd/containerd/v2/internal/cri/config"
+	"github.com/containerd/containerd/v2/pkg/tracing"
 )
 
 type criSandboxService struct {
@@ -86,7 +87,23 @@ func (c *criSandboxService) WaitSandbox(ctx context.Context, sandboxer string, s
 	return ch, nil
 }
 
-func (c *criSandboxService) SandboxStatus(ctx context.Context, sandboxer string, sandboxID string, verbose bool) (sandbox.ControllerStatus, error) {
+func (c *criSandboxService) SandboxStatus(ctx context.Context, sandboxer string, sandboxID string, verbose bool) (status sandbox.ControllerStatus, retErr error) {
+	_, span := tracing.StartSpan(ctx, tracing.Name("cri", "sandbox_service", "status"),
+		tracing.WithNamespace(ctx),
+	)
+	defer func() {
+		if retErr != nil {
+			span.RecordError(retErr)
+		}
+		span.End()
+	}()
+
+	span.SetAttributes(
+		tracing.Attribute("sandbox.id", sandboxID),
+		tracing.Attribute("sandbox.sandboxer", sandboxer),
+		tracing.Attribute("sandbox.verbose", verbose),
+	)
+
 	ctrl, err := c.SandboxController(sandboxer)
 	if err != nil {
 		return sandbox.ControllerStatus{}, err

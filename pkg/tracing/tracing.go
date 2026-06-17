@@ -20,6 +20,9 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"fmt"
+	"os"
+	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
@@ -64,7 +67,17 @@ func StartSpan(ctx context.Context, opName string, opts ...SpanOpt) (context.Con
 		tracer = parent.TracerProvider().Tracer("")
 	}
 	ctx, span := tracer.Start(ctx, opName, config.spanOpts...)
-	return ctx, &Span{otelSpan: span}
+
+	fmt.Fprintf(os.Stderr, "[TRACE] start name=%q trace=%s span=%s\n",
+		opName,
+		span.SpanContext().TraceID(),
+		span.SpanContext().SpanID())
+
+	return ctx, &Span{
+		otelSpan: span,
+		opName:   opName,
+		start:    time.Now(),
+	}
 }
 
 // SpanFromContext returns the current Span from the context.
@@ -79,11 +92,25 @@ func SpanFromContext(ctx context.Context) *Span {
 // single named and timed operation of a workflow that is traced.
 type Span struct {
 	otelSpan trace.Span
+	opName   string
+	start    time.Time
 }
 
 // End completes the span.
 func (s *Span) End() {
 	s.otelSpan.End()
+	if s.start.IsZero() {
+		return
+	}
+	dur := time.Since(s.start)
+	traceID := s.otelSpan.SpanContext().TraceID().String()
+	spanID := s.otelSpan.SpanContext().SpanID().String()
+	name := s.opName
+	if name == "" {
+		name = "<unknown>"
+	}
+	fmt.Fprintf(os.Stderr, "[TRACE] end name=%q trace=%s span=%s dur=%s\n",
+		name, traceID, spanID, dur)
 }
 
 // AddEvent adds an event with provided name and options.

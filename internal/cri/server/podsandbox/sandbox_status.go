@@ -27,25 +27,47 @@ import (
 	"github.com/containerd/containerd/v2/core/containers"
 	"github.com/containerd/containerd/v2/core/sandbox"
 	"github.com/containerd/containerd/v2/internal/cri/server/podsandbox/types"
+	"github.com/containerd/containerd/v2/pkg/tracing"
 	"github.com/containerd/errdefs"
 )
 
-func (c *Controller) Status(ctx context.Context, sandboxID string, verbose bool) (sandbox.ControllerStatus, error) {
+func (c *Controller) Status(ctx context.Context, sandboxID string, verbose bool) (status sandbox.ControllerStatus, retErr error) {
+	_, span := tracing.StartSpan(ctx, tracing.Name("sandbox", "controller", "podsandbox", "status"),
+		tracing.WithNamespace(ctx),
+	)
+	defer func() {
+		if retErr != nil {
+			span.RecordError(retErr)
+		}
+		span.End()
+	}()
+
+	span.SetAttributes(
+		tracing.Attribute("sandbox.id", sandboxID),
+		tracing.Attribute("sandbox.verbose", verbose),
+	)
+
 	sb := c.store.Get(sandboxID)
 	if sb == nil {
 		return sandbox.ControllerStatus{}, fmt.Errorf("unable to find sandbox %q: %w", sandboxID, errdefs.ErrNotFound)
 	}
-	status := sb.Status.Get()
+	stat := sb.Status.Get()
 	cstatus := sandbox.ControllerStatus{
 		SandboxID: sandboxID,
-		Pid:       status.Pid,
-		State:     status.State.String(),
-		CreatedAt: status.CreatedAt,
-		ExitedAt:  status.ExitedAt,
+		Pid:       stat.Pid,
+		State:     stat.State.String(),
+		CreatedAt: stat.CreatedAt,
+		ExitedAt:  stat.ExitedAt,
 		Extra:     nil,
 	}
 
+	span.SetAttributes(
+		tracing.Attribute("sandbox.state", cstatus.State),
+		tracing.Attribute("sandbox.pid", cstatus.Pid),
+	)
+
 	if verbose {
+		span.AddEvent("sandbox.status.verbose_info")
 		info, err := toCRISandboxInfo(ctx, sb)
 		if err != nil {
 			return sandbox.ControllerStatus{}, err
