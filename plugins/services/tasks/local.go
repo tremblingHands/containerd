@@ -58,6 +58,7 @@ import (
 	ptypes "github.com/containerd/containerd/v2/pkg/protobuf/types"
 	"github.com/containerd/containerd/v2/pkg/rdt"
 	"github.com/containerd/containerd/v2/pkg/timeout"
+	"github.com/containerd/containerd/v2/pkg/tracing"
 	"github.com/containerd/containerd/v2/plugins"
 	"github.com/containerd/containerd/v2/plugins/services"
 	"github.com/containerd/containerd/v2/plugins/services/warning"
@@ -169,6 +170,9 @@ type local struct {
 }
 
 func (l *local) Create(ctx context.Context, r *api.CreateTaskRequest, _ ...grpc.CallOption) (*api.CreateTaskResponse, error) {
+	ctx, span := tracing.StartSpan(ctx, tracing.Name("tasks", "create"))
+	defer span.End()
+
 	container, err := l.getContainer(ctx, r.ContainerID)
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)

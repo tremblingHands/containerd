@@ -42,6 +42,7 @@ import (
 	"github.com/containerd/containerd/v2/core/runtime"
 	"github.com/containerd/containerd/v2/pkg/protobuf/proto"
 	"github.com/containerd/containerd/v2/pkg/timeout"
+	"github.com/containerd/containerd/v2/pkg/tracing"
 	"github.com/containerd/containerd/v2/plugins"
 	"github.com/containerd/containerd/v2/plugins/services/warning"
 )
@@ -157,6 +158,9 @@ func (m *TaskManager) ID() string {
 
 // Create launches new shim instance and creates new task
 func (m *TaskManager) Create(ctx context.Context, taskID string, opts runtime.CreateOpts) (_ runtime.Task, retErr error) {
+	ctx, span := tracing.StartSpan(ctx, tracing.Name("runtime", "task_manager", "create"))
+	defer span.End()
+
 	bundle, err := NewBundle(ctx, m.root, m.state, taskID, opts.Spec)
 	if err != nil {
 		return nil, err

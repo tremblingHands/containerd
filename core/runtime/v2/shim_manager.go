@@ -42,6 +42,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	shimbinary "github.com/containerd/containerd/v2/pkg/shim"
 	"github.com/containerd/containerd/v2/pkg/timeout"
+	"github.com/containerd/containerd/v2/pkg/tracing"
 	"github.com/containerd/containerd/v2/plugins"
 	"github.com/containerd/containerd/v2/version"
 )
@@ -196,6 +197,9 @@ func (m *ShimManager) ID() string {
 
 // Start launches a new shim instance
 func (m *ShimManager) Start(ctx context.Context, id string, bundle *Bundle, opts runtime.CreateOpts) (_ ShimInstance, retErr error) {
+	ctx, span := tracing.StartSpan(ctx, tracing.Name("shim", "manager", "start"))
+	defer span.End()
+
 	shouldInvokeShimBinary := false
 
 	var params = &bootapi.BootstrapResult{}

@@ -32,6 +32,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/protobuf/proto"
 	"github.com/containerd/containerd/v2/pkg/protobuf/types"
 	client "github.com/containerd/containerd/v2/pkg/shim"
+	"github.com/containerd/containerd/v2/pkg/tracing"
 	"github.com/containerd/log"
 )
 
@@ -114,7 +115,13 @@ func (b *binary) Start(ctx context.Context, opts *types.Any, onClose func()) (_ 
 			log.G(ctx).WithError(err).Error("copy shim log")
 		}
 	}()
-	out, err := cmd.CombinedOutput()
+	// Span: shim binary exec
+	var out []byte
+	func() {
+		_, execSpan := tracing.StartSpan(ctx, tracing.Name("shim", "binary", "exec"))
+		defer execSpan.End()
+		out, err = cmd.CombinedOutput()
+	}()
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", out, err)
 	}
@@ -135,7 +142,13 @@ func (b *binary) Start(ctx context.Context, opts *types.Any, onClose func()) (_ 
 		return nil, err
 	}
 
-	conn, err := makeConnection(ctx, b.bundle.ID, params, onCloseWithShimLog, client.AnonDialer)
+	// Span: connect to shim
+	var conn any
+	func() {
+		_, connSpan := tracing.StartSpan(ctx, tracing.Name("shim", "binary", "connect"))
+		defer connSpan.End()
+		conn, err = makeConnection(ctx, b.bundle.ID, params, onCloseWithShimLog, client.AnonDialer)
+	}()
 	if err != nil {
 		return nil, err
 	}

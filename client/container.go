@@ -294,7 +294,12 @@ func (c *container) NewTask(ctx context.Context, ioCreate cio.Creator, opts ...N
 		tracing.Attribute("task.request.options", request.Options.String()),
 		tracing.Attribute("task.runtime.name", info.runtime),
 	)
-	response, err := c.client.TaskService().Create(ctx, request)
+	var response *tasks.CreateTaskResponse
+	func() {
+		_, rpcSpan := tracing.StartSpan(ctx, tracing.Name("client", "task_service", "create"))
+		defer rpcSpan.End()
+		response, err = c.client.TaskService().Create(ctx, request)
+	}()
 	if err != nil {
 		return nil, errgrpc.ToNative(err)
 	}

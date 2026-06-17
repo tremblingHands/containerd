@@ -56,6 +56,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/protobuf/proto"
 	ptypes "github.com/containerd/containerd/v2/pkg/protobuf/types"
 	client "github.com/containerd/containerd/v2/pkg/shim"
+	"github.com/containerd/containerd/v2/pkg/tracing"
 	"github.com/containerd/containerd/v2/pkg/timeout"
 )
 
@@ -609,6 +610,7 @@ func (s *shimTask) delete(ctx context.Context, sandboxed bool, removeTask func(c
 }
 
 func (s *shimTask) Create(ctx context.Context, opts runtime.CreateOpts) (runtime.Task, error) {
+	var err error
 	topts := opts.TaskOptions
 	if topts == nil || topts.GetValue() == nil {
 		topts = opts.RuntimeOptions
@@ -632,7 +634,11 @@ func (s *shimTask) Create(ctx context.Context, opts runtime.CreateOpts) (runtime
 		})
 	}
 
-	_, err := s.task.Create(ctx, request)
+	func() {
+		_, createSpan := tracing.StartSpan(ctx, tracing.Name("shim", "task", "create"))
+		defer createSpan.End()
+		_, err = s.task.Create(ctx, request)
+	}()
 	if err != nil {
 		return nil, errgrpc.ToNative(err)
 	}

@@ -486,11 +486,15 @@ func (c *criService) setupPodNetwork(ctx context.Context, sandbox *sandboxstore.
 	netStart := time.Now()
 
 	span.AddEvent("cni.setup.start")
-	if c.config.CniConfig.NetworkPluginSetupSerially {
-		result, err = netPlugin.SetupSerially(ctx, id, path, opts...)
-	} else {
-		result, err = netPlugin.Setup(ctx, id, path, opts...)
-	}
+	func() {
+		_, cniSpan := tracing.StartSpan(ctx, tracing.Name("cni", "plugin_setup"))
+		defer cniSpan.End()
+		if c.config.CniConfig.NetworkPluginSetupSerially {
+			result, err = netPlugin.SetupSerially(ctx, id, path, opts...)
+		} else {
+			result, err = netPlugin.Setup(ctx, id, path, opts...)
+		}
+	}()
 	networkPluginOperations.WithValues(networkSetUpOp).Inc()
 	networkPluginOperationsLatency.WithValues(networkSetUpOp).UpdateSince(netStart)
 	if err != nil {
