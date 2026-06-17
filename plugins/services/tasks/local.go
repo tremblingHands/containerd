@@ -297,6 +297,9 @@ func (l *local) Create(ctx context.Context, r *api.CreateTaskRequest, _ ...grpc.
 }
 
 func (l *local) Start(ctx context.Context, r *api.StartRequest, _ ...grpc.CallOption) (*api.StartResponse, error) {
+	ctx, span := tracing.StartSpan(ctx, tracing.Name("tasks", "start"))
+	defer span.End()
+
 	t, err := l.getTask(ctx, r.ContainerID)
 	if err != nil {
 		return nil, err

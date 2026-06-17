@@ -18,9 +18,14 @@ package cni
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"time"
 
 	cnilibrary "github.com/containernetworking/cni/libcni"
 	types100 "github.com/containernetworking/cni/pkg/types/100"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Network struct {
@@ -30,6 +35,28 @@ type Network struct {
 }
 
 func (n *Network) Attach(ctx context.Context, ns *Namespace) (*types100.Result, error) {
+	tracer := otel.Tracer("")
+	parentSpan := trace.SpanFromContext(ctx)
+	parentSpanID := trace.SpanID{}
+	if parentSpan != nil {
+		parentSpanID = parentSpan.SpanContext().SpanID()
+	}
+	_, span := tracer.Start(ctx, "cni.network.attach")
+	start := time.Now()
+	fmt.Fprintf(os.Stderr, "[TRACE] start name=%q trace=%s span=%s parent=%s\n",
+		"cni.network.attach",
+		span.SpanContext().TraceID(),
+		span.SpanContext().SpanID(),
+		parentSpanID)
+	defer func() {
+		span.End()
+		fmt.Fprintf(os.Stderr, "[TRACE] end name=%q trace=%s span=%s dur=%s\n",
+			"cni.network.attach",
+			span.SpanContext().TraceID(),
+			span.SpanContext().SpanID(),
+			time.Since(start))
+	}()
+
 	r, err := n.cni.AddNetworkList(ctx, n.config, ns.config(n.ifName))
 	if err != nil {
 		return nil, err

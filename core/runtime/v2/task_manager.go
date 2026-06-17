@@ -161,7 +161,14 @@ func (m *TaskManager) Create(ctx context.Context, taskID string, opts runtime.Cr
 	ctx, span := tracing.StartSpan(ctx, tracing.Name("runtime", "task_manager", "create"))
 	defer span.End()
 
-	bundle, err := NewBundle(ctx, m.root, m.state, taskID, opts.Spec)
+	var err error
+
+	var bundle *Bundle
+	func() {
+		_, bundleSpan := tracing.StartSpan(ctx, tracing.Name("runtime", "bundle", "create"))
+		defer bundleSpan.End()
+		bundle, err = NewBundle(ctx, m.root, m.state, taskID, opts.Spec)
+	}()
 	if err != nil {
 		return nil, err
 	}
@@ -190,7 +197,13 @@ func (m *TaskManager) Create(ctx context.Context, taskID string, opts runtime.Cr
 	}
 
 	// Add options based on runtime
-	if ai, err := m.mounts.Activate(ctx, taskID, opts.Rootfs, activateOpts...); err == nil {
+	var ai mount.ActivationInfo
+	func() {
+		_, mountSpan := tracing.StartSpan(ctx, tracing.Name("runtime", "mount", "activate"))
+		defer mountSpan.End()
+		ai, err = m.mounts.Activate(ctx, taskID, opts.Rootfs, activateOpts...)
+	}()
+	if err == nil {
 		opts.Rootfs = ai.System
 		defer func() {
 			if retErr != nil {

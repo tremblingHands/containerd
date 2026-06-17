@@ -22,12 +22,15 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	cnilibrary "github.com/containernetworking/cni/libcni"
 	"github.com/containernetworking/cni/pkg/invoke"
 	"github.com/containernetworking/cni/pkg/types"
 	types100 "github.com/containernetworking/cni/pkg/types/100"
 	"github.com/containernetworking/cni/pkg/version"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type CNI interface {
@@ -200,6 +203,28 @@ func (c *libcni) SetupSerially(ctx context.Context, id string, path string, opts
 }
 
 func (c *libcni) attachNetworksSerially(ctx context.Context, ns *Namespace) ([]*types100.Result, error) {
+	tracer := otel.Tracer("")
+	parentSpan := trace.SpanFromContext(ctx)
+	parentSpanID := trace.SpanID{}
+	if parentSpan != nil {
+		parentSpanID = parentSpan.SpanContext().SpanID()
+	}
+	ctx, span := tracer.Start(ctx, "cni.attach_networks_serially")
+	start := time.Now()
+	fmt.Fprintf(os.Stderr, "[TRACE] start name=%q trace=%s span=%s parent=%s\n",
+		"cni.attach_networks_serially",
+		span.SpanContext().TraceID(),
+		span.SpanContext().SpanID(),
+		parentSpanID)
+	defer func() {
+		span.End()
+		fmt.Fprintf(os.Stderr, "[TRACE] end name=%q trace=%s span=%s dur=%s\n",
+			"cni.attach_networks_serially",
+			span.SpanContext().TraceID(),
+			span.SpanContext().SpanID(),
+			time.Since(start))
+	}()
+
 	var results []*types100.Result
 	for _, network := range c.networks {
 		r, err := network.Attach(ctx, ns)
@@ -224,6 +249,28 @@ func asynchAttach(ctx context.Context, index int, n *Network, ns *Namespace, wg 
 }
 
 func (c *libcni) attachNetworks(ctx context.Context, ns *Namespace) ([]*types100.Result, error) {
+	tracer := otel.Tracer("")
+	parentSpan := trace.SpanFromContext(ctx)
+	parentSpanID := trace.SpanID{}
+	if parentSpan != nil {
+		parentSpanID = parentSpan.SpanContext().SpanID()
+	}
+	ctx, span := tracer.Start(ctx, "cni.attach_networks_parallel")
+	start := time.Now()
+	fmt.Fprintf(os.Stderr, "[TRACE] start name=%q trace=%s span=%s parent=%s\n",
+		"cni.attach_networks_parallel",
+		span.SpanContext().TraceID(),
+		span.SpanContext().SpanID(),
+		parentSpanID)
+	defer func() {
+		span.End()
+		fmt.Fprintf(os.Stderr, "[TRACE] end name=%q trace=%s span=%s dur=%s\n",
+			"cni.attach_networks_parallel",
+			span.SpanContext().TraceID(),
+			span.SpanContext().SpanID(),
+			time.Since(start))
+	}()
+
 	var wg sync.WaitGroup
 	var firstError error
 	results := make([]*types100.Result, len(c.networks))

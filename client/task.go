@@ -253,9 +253,15 @@ func (t *task) Start(ctx context.Context) error {
 	)
 	defer span.End()
 
-	r, err := t.client.TaskService().Start(ctx, &tasks.StartRequest{
-		ContainerID: t.id,
-	})
+	var r *tasks.StartResponse
+	var err error
+	func() {
+		_, rpcSpan := tracing.StartSpan(ctx, tracing.Name("client", "task_service", "start"))
+		defer rpcSpan.End()
+		r, err = t.client.TaskService().Start(ctx, &tasks.StartRequest{
+			ContainerID: t.id,
+		})
+	}()
 	if err != nil {
 		if t.io != nil {
 			t.io.Cancel()
