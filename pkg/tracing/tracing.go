@@ -55,6 +55,14 @@ func WithAttribute(k string, v any) SpanOpt {
 // when the OTLP tracing plugin has not been loaded.
 var initTP sync.Once
 
+// EnsureTracerProvider ensures a valid TracerProvider is set globally.
+// This is the exported version of ensureTracerProvider for use by external
+// processes (e.g. the shim) that need a valid TracerProvider before any
+// spans are created.
+func EnsureTracerProvider() {
+	ensureTracerProvider()
+}
+
 // ensureTracerProvider ensures a valid TracerProvider is set globally.
 // When the OTLP tracing plugin is skipped (no endpoint configured), the
 // default no-op TracerProvider generates zero trace/span IDs. This function

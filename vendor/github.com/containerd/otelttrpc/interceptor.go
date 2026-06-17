@@ -34,7 +34,9 @@ package otelttrpc
 
 import (
 	"context"
+	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"time"
 
@@ -134,6 +136,13 @@ func UnaryServerInterceptor(opts ...Option) ttrpc.UnaryServerInterceptor {
 
 		ctx = extract(ctx, cfg.Propagators)
 
+		// Capture parent span ID for [TRACE] output
+		parentSpan := trace.SpanFromContext(ctx)
+		parentSpanID := trace.SpanID{}
+		if parentSpan != nil {
+			parentSpanID = parentSpan.SpanContext().SpanID()
+		}
+
 		name, attr := spanInfo(info.FullMethod, peerFromCtx(ctx))
 		ctx, span := tracer.Start(
 			trace.ContextWithRemoteSpanContext(ctx, trace.SpanContextFromContext(ctx)),
@@ -141,7 +150,20 @@ func UnaryServerInterceptor(opts ...Option) ttrpc.UnaryServerInterceptor {
 			trace.WithSpanKind(trace.SpanKindServer),
 			trace.WithAttributes(attr...),
 		)
-		defer span.End()
+		start := time.Now()
+		fmt.Fprintf(os.Stderr, "[TRACE] start name=%q trace=%s span=%s parent=%s\n",
+			name,
+			span.SpanContext().TraceID(),
+			span.SpanContext().SpanID(),
+			parentSpanID)
+		defer func() {
+			span.End()
+			fmt.Fprintf(os.Stderr, "[TRACE] end name=%q trace=%s span=%s dur=%s\n",
+				name,
+				span.SpanContext().TraceID(),
+				span.SpanContext().SpanID(),
+				time.Since(start))
+		}()
 
 		if cfg.ReceivedEvent {
 			messageReceived.Event(ctx, 1, nil)

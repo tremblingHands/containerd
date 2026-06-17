@@ -20,5 +20,13 @@ package main
 
 import (
 	_ "github.com/containerd/containerd/v2/internal/pprof"
+	"github.com/containerd/containerd/v2/pkg/tracing"
 	_ "github.com/containerd/containerd/v2/pkg/tracing/plugin"
 )
+
+func init() {
+	// Ensure a valid TracerProvider is available so that
+	// OpenTelemetry spans created by otelttrpc interceptors
+	// have valid trace/span IDs even without an OTLP exporter.
+	tracing.EnsureTracerProvider()
+}
