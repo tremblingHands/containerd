@@ -346,7 +346,10 @@ func (c *Client) NewContainer(ctx context.Context, id string, opts ...NewContain
 	}
 	defer done(ctx)
 
-	runtime, err := c.defaultRuntime(ctx)
+	// ★ sub-span: defaultRuntime
+	rctx, rsp := tracing.StartSpan(ctx, "client.defaultRuntime")
+	runtime, err := c.defaultRuntime(rctx)
+	rsp.End()
 	if err != nil {
 		return nil, err
 	}
@@ -357,8 +360,14 @@ func (c *Client) NewContainer(ctx context.Context, id string, opts ...NewContain
 			Name: runtime,
 		},
 	}
-	for _, o := range opts {
-		if err := o(ctx, c, &container); err != nil {
+	// ★ sub-span: 每个 opt 单独计时
+	for i, o := range opts {
+		_, ospan := tracing.StartSpan(ctx, "client.NewContainer.opt",
+			tracing.WithAttribute("opt.index", i),
+		)
+		err := o(ctx, c, &container)
+		ospan.End()
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -369,7 +378,10 @@ func (c *Client) NewContainer(ctx context.Context, id string, opts ...NewContain
 		tracing.Attribute("container.runtime.name", container.Runtime.Name),
 		tracing.Attribute("container.snapshotter.name", container.Snapshotter),
 	)
+	// ★ sub-span: 独立计 ContainerService.Create 的 gRPC
+	_, cspan := tracing.StartSpan(ctx, "client.Containers.Create")
 	r, err := c.ContainerService().Create(ctx, container)
+	cspan.End()
 	if err != nil {
 		return nil, err
 	}

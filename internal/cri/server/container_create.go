@@ -58,7 +58,10 @@ func init() {
 
 // CreateContainer creates a new container in the given PodSandbox.
 func (c *criService) CreateContainer(ctx context.Context, r *runtime.CreateContainerRequest) (_ *runtime.CreateContainerResponse, retErr error) {
-	span := tracing.SpanFromContext(ctx)
+	ctx, span := tracing.StartSpan(ctx, tracing.Name("cri", "sandbox", "container", "create"),
+		tracing.WithNamespace(ctx),
+	)
+	defer span.End()
 	config := r.GetConfig()
 	log.G(ctx).Debugf("Container config %+v", config)
 	sandboxConfig := r.GetSandboxConfig()
@@ -232,7 +235,11 @@ type createContainerRequest struct {
 }
 
 func (c *criService) createContainer(r *createContainerRequest) (_ string, retErr error) {
-	span := tracing.SpanFromContext(r.ctx)
+	ctx, span := tracing.StartSpan(r.ctx, tracing.Name("cri", "sandbox", "container", "do_create"),
+		tracing.WithNamespace(r.ctx),
+	)
+	r.ctx = ctx
+	defer span.End()
 	// Create container root directory.
 	containerRootDir := c.getContainerRootDir(r.containerID)
 	if err := c.os.MkdirAll(containerRootDir, 0755); err != nil {

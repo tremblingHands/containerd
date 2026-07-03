@@ -33,6 +33,7 @@ import (
 	"github.com/containerd/typeurl/v2"
 	"github.com/opencontainers/image-spec/identity"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/containerd/containerd/v2/pkg/tracing"
 )
 
 // DeleteOpts allows the caller to set options for the deletion of a container
@@ -235,30 +236,51 @@ func WithNewSnapshotView(id string, i Image, opts ...snapshots.Opt) NewContainer
 
 func withNewSnapshot(id string, i Image, readonly bool, opts ...snapshots.Opt) NewContainerOpts {
 	return func(ctx context.Context, client *Client, c *containers.Container) error {
+		// ★ sub-span: 取 image rootfs (gRPC)
+		_, s1 := tracing.StartSpan(ctx, "client.image.RootFS")
 		diffIDs, err := i.RootFS(ctx)
+		s1.End()
 		if err != nil {
 			return err
 		}
 
 		parent := identity.ChainID(diffIDs).String()
+
+		// ★ sub-span: 解析 snapshotter 名称
+		_, s2 := tracing.StartSpan(ctx, "client.resolveSnapshotter")
 		c.Snapshotter, err = client.resolveSnapshotterName(ctx, c.Snapshotter)
-		if err != nil {
-			return err
-		}
-		s, err := client.getSnapshotter(ctx, c.Snapshotter)
-		if err != nil {
-			return err
-		}
-		parent, err = resolveSnapshotOptions(ctx, client, c.Snapshotter, s, parent, opts...)
+		s2.End()
 		if err != nil {
 			return err
 		}
 
+		// ★ sub-span: 取 snapshotter (gRPC)
+		_, s3 := tracing.StartSpan(ctx, "client.getSnapshotter")
+		s, err := client.getSnapshotter(ctx, c.Snapshotter)
+		s3.End()
+		if err != nil {
+			return err
+		}
+
+		// ★ sub-span: 解析 snapshot options
+		_, s4 := tracing.StartSpan(ctx, "client.resolveSnapshotOptions")
+		parent, err = resolveSnapshotOptions(ctx, client, c.Snapshotter, s, parent, opts...)
+		s4.End()
+		if err != nil {
+			return err
+		}
+
+		// ★ sub-span: ★★★ 实际创建 snapshot (gRPC, 最重!)
+		_, s5 := tracing.StartSpan(ctx, "client.snapshotter.Prepare",
+			tracing.WithAttribute("snapshot.id", id),
+			tracing.WithAttribute("snapshot.readonly", readonly),
+		)
 		if readonly {
 			_, err = s.View(ctx, id, parent, opts...)
 		} else {
 			_, err = s.Prepare(ctx, id, parent, opts...)
 		}
+		s5.End()
 		if err != nil {
 			return err
 		}
