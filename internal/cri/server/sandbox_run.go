@@ -487,12 +487,13 @@ func (c *criService) setupPodNetwork(ctx context.Context, sandbox *sandboxstore.
 
 	span.AddEvent("cni.setup.start")
 	func() {
-		_, cniSpan := tracing.StartSpan(ctx, tracing.Name("cni", "plugin_setup"))
+		// Propagate the plugin_setup span ctx so attach/plugin children nest under it.
+		setupCtx, cniSpan := tracing.StartSpan(ctx, tracing.Name("cni", "plugin_setup"))
 		defer cniSpan.End()
 		if c.config.CniConfig.NetworkPluginSetupSerially {
-			result, err = netPlugin.SetupSerially(ctx, id, path, opts...)
+			result, err = netPlugin.SetupSerially(setupCtx, id, path, opts...)
 		} else {
-			result, err = netPlugin.Setup(ctx, id, path, opts...)
+			result, err = netPlugin.Setup(setupCtx, id, path, opts...)
 		}
 	}()
 	networkPluginOperations.WithValues(networkSetUpOp).Inc()

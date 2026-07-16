@@ -526,14 +526,15 @@ func (c *CNIConfig) AddNetworkList(ctx context.Context, list *NetworkConfigList,
 	}
 	for _, net := range list.Plugins {
 		spanName := "cni.plugin." + net.Network.Type
-		_, pluginSpan := tracer.Start(ctx, spanName)
+		// Nest each plugin under the incoming ctx (cni.network.attach).
+		pluginCtx, pluginSpan := tracer.Start(ctx, spanName)
 		pluginStart := time.Now()
 		fmt.Fprintf(os.Stderr, "[TRACE] start name=%q trace=%s span=%s parent=%s\n",
 			spanName,
 			pluginSpan.SpanContext().TraceID(),
 			pluginSpan.SpanContext().SpanID(),
 			parentSpanID)
-		result, err = c.addNetwork(ctx, list.Name, list.CNIVersion, net, result, rt)
+		result, err = c.addNetwork(pluginCtx, list.Name, list.CNIVersion, net, result, rt)
 		pluginSpan.End()
 		fmt.Fprintf(os.Stderr, "[TRACE] end name=%q trace=%s span=%s dur=%s\n",
 			spanName,

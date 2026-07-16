@@ -41,7 +41,7 @@ func (n *Network) Attach(ctx context.Context, ns *Namespace) (*types100.Result, 
 	if parentSpan != nil {
 		parentSpanID = parentSpan.SpanContext().SpanID()
 	}
-	_, span := tracer.Start(ctx, "cni.network.attach")
+	ctx, span := tracer.Start(ctx, "cni.network.attach")
 	start := time.Now()
 	fmt.Fprintf(os.Stderr, "[TRACE] start name=%q trace=%s span=%s parent=%s\n",
 		"cni.network.attach",
@@ -57,6 +57,7 @@ func (n *Network) Attach(ctx context.Context, ns *Namespace) (*types100.Result, 
 			time.Since(start))
 	}()
 
+	// Pass the network.attach ctx so cni.plugin.* spans nest under it.
 	r, err := n.cni.AddNetworkList(ctx, n.config, ns.config(n.ifName))
 	if err != nil {
 		return nil, err
