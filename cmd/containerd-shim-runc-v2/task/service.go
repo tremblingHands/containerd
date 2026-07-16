@@ -53,6 +53,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/shutdown"
 	"github.com/containerd/containerd/v2/pkg/stdio"
 	"github.com/containerd/containerd/v2/pkg/sys/reaper"
+	"github.com/containerd/containerd/v2/pkg/tracing"
 )
 
 var (
@@ -221,6 +222,11 @@ func (s *service) preStart(c *runc.Container) (handleStarted func(*runc.Containe
 
 // Create a new initial process and container with the underlying OCI runtime
 func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *taskAPI.CreateTaskResponse, err error) {
+	ctx, span := tracing.StartSpan(ctx, tracing.Name("shim", "container", "create"),
+		tracing.WithAttribute("container.id", r.ID),
+	)
+	defer span.End()
+
 	s.lifecycleMu.Lock()
 	handleStarted, cleanup := s.preStart(nil)
 	s.lifecycleMu.Unlock()

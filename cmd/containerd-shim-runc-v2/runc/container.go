@@ -41,6 +41,7 @@ import (
 	"github.com/containerd/containerd/v2/core/mount"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/stdio"
+	"github.com/containerd/containerd/v2/pkg/tracing"
 )
 
 // NewContainer returns a new runc container
@@ -117,8 +118,16 @@ func NewContainer(ctx context.Context, platform stdio.Platform, r *task.CreateTa
 			}
 		}
 	}()
-	if err := mount.All(mounts, rootfs); err != nil {
-		return nil, fmt.Errorf("failed to mount rootfs component: %w", err)
+	if len(mounts) > 0 {
+		var mountErr error
+		func() {
+			_, mountSpan := tracing.StartSpan(ctx, tracing.Name("shim", "rootfs", "mount"))
+			defer mountSpan.End()
+			mountErr = mount.All(mounts, rootfs)
+		}()
+		if mountErr != nil {
+			return nil, fmt.Errorf("failed to mount rootfs component: %w", mountErr)
+		}
 	}
 
 	p, err := newInit(

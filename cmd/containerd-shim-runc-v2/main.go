@@ -24,7 +24,16 @@ import (
 	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/manager"
 	_ "github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/task/plugin"
 	"github.com/containerd/containerd/v2/pkg/shim"
+	"github.com/containerd/containerd/v2/pkg/tracing"
+	_ "github.com/containerd/containerd/v2/pkg/tracing/plugin"
 )
+
+func init() {
+	// Emit [TRACE] spans (and enable otelttrpc server interceptor) without
+	// requiring a separate -tags shim_tracing rebuild. OTLP export still
+	// skips unless an endpoint is configured.
+	tracing.EnsureTracerProvider()
+}
 
 func main() {
 	shim.RunShim(context.Background(), manager.NewShimManager("io.containerd.runc.v2"))

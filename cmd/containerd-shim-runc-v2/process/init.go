@@ -34,6 +34,7 @@ import (
 	"github.com/containerd/containerd/v2/core/mount"
 	google_protobuf "github.com/containerd/containerd/v2/pkg/protobuf/types"
 	"github.com/containerd/containerd/v2/pkg/stdio"
+	"github.com/containerd/containerd/v2/pkg/tracing"
 	"github.com/containerd/fifo"
 	runc "github.com/containerd/go-runc"
 	"github.com/containerd/log"
@@ -108,6 +109,11 @@ func New(id string, runtime *runc.Runc, stdio stdio.Stdio) *Init {
 
 // Create the process with the provided config
 func (p *Init) Create(ctx context.Context, r *CreateConfig) (retError error) {
+	ctx, span := tracing.StartSpan(ctx, tracing.Name("shim", "init", "create"),
+		tracing.WithAttribute("container.id", r.ID),
+	)
+	defer span.End()
+
 	var (
 		err     error
 		socket  *runc.Socket
@@ -146,7 +152,14 @@ func (p *Init) Create(ctx context.Context, r *CreateConfig) (retError error) {
 		opts.ConsoleSocket = socket
 	}
 
-	if err := p.runtime.Create(ctx, r.ID, r.Bundle, opts); err != nil {
+	func() {
+		_, runcSpan := tracing.StartSpan(ctx, tracing.Name("shim", "runc", "create"),
+			tracing.WithAttribute("container.id", r.ID),
+		)
+		defer runcSpan.End()
+		err = p.runtime.Create(ctx, r.ID, r.Bundle, opts)
+	}()
+	if err != nil {
 		return p.runtimeError(err, "OCI runtime create failed")
 	}
 	if r.Stdin != "" {
