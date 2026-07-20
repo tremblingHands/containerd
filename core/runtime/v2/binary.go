@@ -115,12 +115,39 @@ func (b *binary) Start(ctx context.Context, opts *types.Any, onClose func()) (_ 
 			log.G(ctx).WithError(err).Error("copy shim log")
 		}
 	}()
-	// Span: shim binary exec
+	// Span: shim binary exec — fork/exec the shim "start" helper and wait
+	// until it prints bootstrap params on stdout and exits. Most wall time is
+	// usually in .wait (Go runtime + socket setup + re-exec of long-lived shim).
 	var out []byte
 	func() {
-		_, execSpan := tracing.StartSpan(ctx, tracing.Name("shim", "binary", "exec"))
+		ctx, execSpan := tracing.StartSpan(ctx, tracing.Name("shim", "binary", "exec"))
 		defer execSpan.End()
-		out, err = cmd.CombinedOutput()
+
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+
+		func() {
+			_, s := tracing.StartSpan(ctx, tracing.Name("shim", "binary", "exec", "start"))
+			defer s.End()
+			err = cmd.Start()
+		}()
+		if err != nil {
+			return
+		}
+
+		func() {
+			_, s := tracing.StartSpan(ctx, tracing.Name("shim", "binary", "exec", "wait"))
+			defer s.End()
+			err = cmd.Wait()
+		}()
+		out = stdout.Bytes()
+		if err != nil {
+			// Match CombinedOutput: include stderr in the error payload.
+			if stderr.Len() > 0 {
+				out = append(out, stderr.Bytes()...)
+			}
+		}
 	}()
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", out, err)

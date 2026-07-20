@@ -362,10 +362,10 @@ func (c *Client) NewContainer(ctx context.Context, id string, opts ...NewContain
 	}
 	// ★ sub-span: 每个 opt 单独计时
 	for i, o := range opts {
-		_, ospan := tracing.StartSpan(ctx, "client.NewContainer.opt",
+		octx, ospan := tracing.StartSpan(ctx, "client.NewContainer.opt",
 			tracing.WithAttribute("opt.index", i),
 		)
-		err := o(ctx, c, &container)
+		err := o(octx, c, &container)
 		ospan.End()
 		if err != nil {
 			return nil, err

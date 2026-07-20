@@ -67,25 +67,43 @@ func (s *sandboxStore) Create(ctx context.Context, sandbox api.Sandbox) (api.San
 	sandbox.CreatedAt = time.Now().UTC()
 	sandbox.UpdatedAt = sandbox.CreatedAt
 
-	if err := s.validate(&sandbox); err != nil {
+	func() {
+		_, vs := tracing.StartSpan(ctx, tracing.Name(spanSandboxPrefix, "Create", "validate"))
+		defer vs.End()
+		err = s.validate(&sandbox)
+	}()
+	if err != nil {
 		return api.Sandbox{}, fmt.Errorf("failed to validate sandbox: %w", err)
 	}
 
-	if err := update(ctx, s.db, func(tx *bbolt.Tx) error {
-		parent, err := createSandboxBucket(tx, ns)
-		if err != nil {
-			return fmt.Errorf("create error: %w", err)
+	err = updateTraced(ctx, s.db, tracing.Name(spanSandboxPrefix, "Create"), func(tctx context.Context, tx *bbolt.Tx) error {
+		var parent *bbolt.Bucket
+		var berr error
+		func() {
+			_, bs := tracing.StartSpan(tctx, tracing.Name(spanSandboxPrefix, "Create", "bucket"))
+			defer bs.End()
+			parent, berr = createSandboxBucket(tx, ns)
+		}()
+		if berr != nil {
+			return fmt.Errorf("create error: %w", berr)
 		}
 
-		if err := s.write(parent, &sandbox, false); err != nil {
-			return fmt.Errorf("write error: %w", err)
+		var werr error
+		func() {
+			_, ws := tracing.StartSpan(tctx, tracing.Name(spanSandboxPrefix, "Create", "write"))
+			defer ws.End()
+			werr = s.write(parent, &sandbox, false)
+		}()
+		if werr != nil {
+			return fmt.Errorf("write error: %w", werr)
 		}
 
 		span.SetAttributes(
 			tracing.Attribute("sandbox.CreatedAt", sandbox.CreatedAt.Format(time.RFC3339)),
 		)
 		return nil
-	}); err != nil {
+	})
+	if err != nil {
 		return api.Sandbox{}, err
 	}
 
@@ -97,6 +115,7 @@ func (s *sandboxStore) Update(ctx context.Context, sandbox api.Sandbox, fieldpat
 	ctx, span := tracing.StartSpan(ctx,
 		tracing.Name(spanSandboxPrefix, "Update"),
 		tracing.WithAttribute("sandbox.id", sandbox.ID),
+		tracing.WithAttribute("sandbox.fields", strings.Join(fieldpaths, ",")),
 		tracing.WithNamespace(ctx),
 	)
 	defer span.End()
@@ -107,15 +126,21 @@ func (s *sandboxStore) Update(ctx context.Context, sandbox api.Sandbox, fieldpat
 	}
 
 	ret := api.Sandbox{}
-	if err := update(ctx, s.db, func(tx *bbolt.Tx) error {
+	err = updateTraced(ctx, s.db, tracing.Name(spanSandboxPrefix, "Update"), func(tctx context.Context, tx *bbolt.Tx) error {
 		parent := getSandboxBucket(tx, ns)
 		if parent == nil {
 			return fmt.Errorf("no sandbox buckets: %w", errdefs.ErrNotFound)
 		}
 
-		updated, err := s.read(parent, []byte(sandbox.ID))
-		if err != nil {
-			return err
+		var updated api.Sandbox
+		var rerr error
+		func() {
+			_, rs := tracing.StartSpan(tctx, tracing.Name(spanSandboxPrefix, "Update", "read"))
+			defer rs.End()
+			updated, rerr = s.read(parent, []byte(sandbox.ID))
+		}()
+		if rerr != nil {
+			return rerr
 		}
 
 		if len(fieldpaths) == 0 {
@@ -161,8 +186,14 @@ func (s *sandboxStore) Update(ctx context.Context, sandbox api.Sandbox, fieldpat
 
 		updated.UpdatedAt = time.Now().UTC()
 
-		if err := s.write(parent, &updated, true); err != nil {
-			return err
+		var werr error
+		func() {
+			_, ws := tracing.StartSpan(tctx, tracing.Name(spanSandboxPrefix, "Update", "write"))
+			defer ws.End()
+			werr = s.write(parent, &updated, true)
+		}()
+		if werr != nil {
+			return werr
 		}
 
 		span.SetAttributes(
@@ -171,7 +202,8 @@ func (s *sandboxStore) Update(ctx context.Context, sandbox api.Sandbox, fieldpat
 		)
 		ret = updated
 		return nil
-	}); err != nil {
+	})
+	if err != nil {
 		return api.Sandbox{}, err
 	}
 

@@ -31,6 +31,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/filters"
 	"github.com/containerd/containerd/v2/pkg/labels"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
+	"github.com/containerd/containerd/v2/pkg/tracing"
 	"github.com/containerd/errdefs"
 	"github.com/containerd/log"
 	bolt "go.etcd.io/bbolt"
@@ -296,6 +297,18 @@ func (s *snapshotter) View(ctx context.Context, key, parent string, opts ...snap
 }
 
 func (s *snapshotter) createSnapshot(ctx context.Context, key, parent string, readonly bool, opts []snapshots.Opt) ([]mount.Mount, error) {
+	op := "Prepare"
+	if readonly {
+		op = "View"
+	}
+	prefix := tracing.Name("metadata.snapshot", op)
+	ctx, span := tracing.StartSpan(ctx, prefix,
+		tracing.WithAttribute("snapshot.key", key),
+		tracing.WithAttribute("snapshot.parent", parent),
+		tracing.WithAttribute("snapshot.snapshotter", s.name),
+	)
+	defer span.End()
+
 	s.l.RLock()
 	defer s.l.RUnlock()
 
@@ -325,7 +338,8 @@ func (s *snapshotter) createSnapshot(ctx context.Context, key, parent string, re
 		rerr error
 	)
 
-	if err := update(ctx, s.db, func(tx *bolt.Tx) error {
+	// First bolt txn: allocate key / resolve parent. Under concurrency .tx.wait dominates.
+	if err := updateTraced(ctx, s.db, tracing.Name(prefix, "alloc"), func(_ context.Context, tx *bolt.Tx) error {
 		bkt, err := createSnapshotterBucket(tx, ns, s.name)
 		if err != nil {
 			return err
@@ -377,11 +391,17 @@ func (s *snapshotter) createSnapshot(ctx context.Context, key, parent string, re
 		m       []mount.Mount
 		created string
 	)
-	if readonly {
-		m, err = s.Snapshotter.View(ctx, bkey, bparent, bopts...)
-	} else {
-		m, err = s.Snapshotter.Prepare(ctx, bkey, bparent, bopts...)
-	}
+	func() {
+		_, bs := tracing.StartSpan(ctx, tracing.Name(prefix, "backend"),
+			tracing.WithAttribute("snapshot.backend_key", bkey),
+		)
+		defer bs.End()
+		if readonly {
+			m, err = s.Snapshotter.View(ctx, bkey, bparent, bopts...)
+		} else {
+			m, err = s.Snapshotter.Prepare(ctx, bkey, bparent, bopts...)
+		}
+	}()
 
 	// An already exists error should indicate the backend found a snapshot
 	// matching a provided target reference.
@@ -443,7 +463,7 @@ func (s *snapshotter) createSnapshot(ctx context.Context, key, parent string, re
 		created = bkey
 	}
 
-	if txerr := update(ctx, s.db, func(tx *bolt.Tx) error {
+	if txerr := updateTraced(ctx, s.db, tracing.Name(prefix, "store"), func(_ context.Context, tx *bolt.Tx) error {
 		bkt := getSnapshotterBucket(tx, ns, s.name)
 		if bkt == nil {
 			return fmt.Errorf("can not find snapshotter %q: %w", s.name, errdefs.ErrNotFound)
