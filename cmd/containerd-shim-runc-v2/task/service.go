@@ -234,9 +234,10 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 
 	var container *runc.Container
 	func() {
-		_, ncSpan := tracing.StartSpan(ctx, tracing.Name("shim", "container", "new"))
+		nctx, ncSpan := tracing.StartSpan(ctx, tracing.Name("shim", "container", "new"))
 		defer ncSpan.End()
-		container, err = runc.NewContainer(ctx, s.platform, r)
+		// Pass nctx so rootfs.mount / init.* / cgroup.load nest under container.new.
+		container, err = runc.NewContainer(nctx, s.platform, r)
 	}()
 	if err != nil {
 		return nil, err
