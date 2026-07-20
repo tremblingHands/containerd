@@ -118,6 +118,7 @@ func (p *Init) Create(ctx context.Context, r *CreateConfig) (retError error) {
 		err     error
 		socket  *runc.Socket
 		pio     *processIO
+		pid     int
 		pidFile = newPidFile(p.Bundle)
 	)
 
@@ -127,7 +128,12 @@ func (p *Init) Create(ctx context.Context, r *CreateConfig) (retError error) {
 		}
 		defer socket.Close()
 	} else {
-		if pio, err = createIO(ctx, p.id, p.IoUID, p.IoGID, p.stdio); err != nil {
+		func() {
+			_, ioSpan := tracing.StartSpan(ctx, tracing.Name("shim", "init", "io"))
+			defer ioSpan.End()
+			pio, err = createIO(ctx, p.id, p.IoUID, p.IoGID, p.stdio)
+		}()
+		if err != nil {
 			return fmt.Errorf("failed to create init process I/O: %w", err)
 		}
 		p.io = pio
@@ -170,21 +176,40 @@ func (p *Init) Create(ctx context.Context, r *CreateConfig) (retError error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	if socket != nil {
-		console, err := socket.ReceiveMaster()
+		func() {
+			_, consoleSpan := tracing.StartSpan(ctx, tracing.Name("shim", "init", "console"))
+			defer consoleSpan.End()
+			var cons console.Console
+			cons, err = socket.ReceiveMaster()
+			if err != nil {
+				err = fmt.Errorf("failed to retrieve console master: %w", err)
+				return
+			}
+			cons, err = p.Platform.CopyConsole(ctx, cons, p.id, r.Stdin, r.Stdout, r.Stderr, &p.wg)
+			if err != nil {
+				err = fmt.Errorf("failed to start console copy: %w", err)
+				return
+			}
+			p.console = cons
+		}()
 		if err != nil {
-			return fmt.Errorf("failed to retrieve console master: %w", err)
+			return err
 		}
-		console, err = p.Platform.CopyConsole(ctx, console, p.id, r.Stdin, r.Stdout, r.Stderr, &p.wg)
-		if err != nil {
-			return fmt.Errorf("failed to start console copy: %w", err)
-		}
-		p.console = console
 	} else {
-		if err := pio.Copy(ctx, &p.wg); err != nil {
+		func() {
+			_, copySpan := tracing.StartSpan(ctx, tracing.Name("shim", "init", "pio.copy"))
+			defer copySpan.End()
+			err = pio.Copy(ctx, &p.wg)
+		}()
+		if err != nil {
 			return fmt.Errorf("failed to start io pipe copy: %w", err)
 		}
 	}
-	pid, err := pidFile.Read()
+	func() {
+		_, pidSpan := tracing.StartSpan(ctx, tracing.Name("shim", "init", "pid"))
+		defer pidSpan.End()
+		pid, err = pidFile.Read()
+	}()
 	if err != nil {
 		return fmt.Errorf("failed to retrieve OCI runtime container pid: %w", err)
 	}

@@ -130,16 +130,21 @@ func NewContainer(ctx context.Context, platform stdio.Platform, r *task.CreateTa
 		}
 	}
 
-	p, err := newInit(
-		ctx,
-		r.Bundle,
-		filepath.Join(r.Bundle, "work"),
-		ns,
-		platform,
-		config,
-		opts,
-		rootfs,
-	)
+	var p *process.Init
+	func() {
+		_, initSpan := tracing.StartSpan(ctx, tracing.Name("shim", "init", "new"))
+		defer initSpan.End()
+		p, err = newInit(
+			ctx,
+			r.Bundle,
+			filepath.Join(r.Bundle, "work"),
+			ns,
+			platform,
+			config,
+			opts,
+			rootfs,
+		)
+	}()
 	if err != nil {
 		return nil, errgrpc.ToGRPC(err)
 	}
@@ -155,9 +160,13 @@ func NewContainer(ctx context.Context, platform stdio.Platform, r *task.CreateTa
 	}
 	pid := p.Pid()
 	if pid > 0 {
-		if cg, err := loadProcessCgroup(ctx, pid); err == nil {
-			container.cgroup = cg
-		}
+		func() {
+			_, cgSpan := tracing.StartSpan(ctx, tracing.Name("shim", "cgroup", "load"))
+			defer cgSpan.End()
+			if cg, err := loadProcessCgroup(ctx, pid); err == nil {
+				container.cgroup = cg
+			}
+		}()
 	}
 	return container, nil
 }

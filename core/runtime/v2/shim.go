@@ -635,9 +635,11 @@ func (s *shimTask) Create(ctx context.Context, opts runtime.CreateOpts) (runtime
 	}
 
 	func() {
-		_, createSpan := tracing.StartSpan(ctx, tracing.Name("shim", "task", "create"))
+		cctx, createSpan := tracing.StartSpan(ctx, tracing.Name("shim", "task", "create"))
 		defer createSpan.End()
-		_, err = s.task.Create(ctx, request)
+		// Pass cctx so otelttrpc can inject this span as parent of the
+		// shim-side Task/Create / shim.container.create tree.
+		_, err = s.task.Create(cctx, request)
 	}()
 	if err != nil {
 		return nil, errgrpc.ToNative(err)

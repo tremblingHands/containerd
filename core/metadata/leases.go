@@ -27,6 +27,7 @@ import (
 	"github.com/containerd/containerd/v2/core/metadata/boltutil"
 	"github.com/containerd/containerd/v2/pkg/filters"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
+	"github.com/containerd/containerd/v2/pkg/tracing"
 	"github.com/containerd/errdefs"
 	digest "github.com/opencontainers/go-digest"
 	bolt "go.etcd.io/bbolt"
@@ -49,6 +50,10 @@ func NewLeaseManager(db *DB) leases.Manager {
 
 // Create creates a new lease using the provided lease
 func (lm *leaseManager) Create(ctx context.Context, opts ...leases.Opt) (leases.Lease, error) {
+	const prefix = "metadata.lease.Create"
+	ctx, span := tracing.StartSpan(ctx, tracing.Name(prefix))
+	defer span.End()
+
 	var l leases.Lease
 	for _, opt := range opts {
 		if err := opt(&l); err != nil {
@@ -58,13 +63,14 @@ func (lm *leaseManager) Create(ctx context.Context, opts ...leases.Opt) (leases.
 	if l.ID == "" {
 		return leases.Lease{}, errors.New("lease id must be provided")
 	}
+	span.SetAttributes(tracing.Attribute("lease.id", l.ID))
 
 	namespace, err := namespaces.NamespaceRequired(ctx)
 	if err != nil {
 		return leases.Lease{}, err
 	}
 
-	if err := update(ctx, lm.db, func(tx *bolt.Tx) error {
+	if err := updateTraced(ctx, lm.db, prefix, func(_ context.Context, tx *bolt.Tx) error {
 		topbkt, err := createBucketIfNotExists(tx, bucketKeyVersion, []byte(namespace), bucketKeyObjectLeases)
 		if err != nil {
 			return err
@@ -96,6 +102,7 @@ func (lm *leaseManager) Create(ctx context.Context, opts ...leases.Opt) (leases.
 
 		return nil
 	}); err != nil {
+		span.SetStatus(err)
 		return leases.Lease{}, err
 	}
 	return l, nil

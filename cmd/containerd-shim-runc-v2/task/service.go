@@ -232,7 +232,12 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 	s.lifecycleMu.Unlock()
 	defer cleanup()
 
-	container, err := runc.NewContainer(ctx, s.platform, r)
+	var container *runc.Container
+	func() {
+		_, ncSpan := tracing.StartSpan(ctx, tracing.Name("shim", "container", "new"))
+		defer ncSpan.End()
+		container, err = runc.NewContainer(ctx, s.platform, r)
+	}()
 	if err != nil {
 		return nil, err
 	}
@@ -241,46 +246,54 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 	s.containers[r.ID] = container
 	s.mu.Unlock()
 
-	s.send(&eventstypes.TaskCreate{
-		ContainerID: r.ID,
-		Bundle:      r.Bundle,
-		Rootfs:      r.Rootfs,
-		IO: &eventstypes.TaskIO{
-			Stdin:    r.Stdin,
-			Stdout:   r.Stdout,
-			Stderr:   r.Stderr,
-			Terminal: r.Terminal,
-		},
-		Checkpoint: r.Checkpoint,
-		Pid:        uint32(container.Pid()),
-	})
+	func() {
+		_, evSpan := tracing.StartSpan(ctx, tracing.Name("shim", "container", "event"))
+		defer evSpan.End()
+		s.send(&eventstypes.TaskCreate{
+			ContainerID: r.ID,
+			Bundle:      r.Bundle,
+			Rootfs:      r.Rootfs,
+			IO: &eventstypes.TaskIO{
+				Stdin:    r.Stdin,
+				Stdout:   r.Stdout,
+				Stderr:   r.Stderr,
+				Terminal: r.Terminal,
+			},
+			Checkpoint: r.Checkpoint,
+			Pid:        uint32(container.Pid()),
+		})
+	}()
 
 	// After runc.Create(init), the container’s cgroup contains a paused init process.
 	// Therefore, we should start monitoring OOM events immediately after creation, in
 	// case the process goes OOM very quickly. Otherwise, we may encounter flaky cases
-	switch cg := container.Cgroup().(type) {
-	case cgroup1.Cgroup:
-		if err := s.cg1oom.Add(container.ID, cg); err != nil {
-			log.G(ctx).WithError(err).Error("add cg to OOM monitor")
-		}
-	case *cgroupsv2.Manager:
-		allControllers, err := cg.RootControllers()
-		if err != nil {
-			log.G(ctx).WithError(err).Error("failed to get root controllers")
-		} else {
-			if err := cg.ToggleControllers(allControllers, cgroupsv2.Enable); err != nil {
-				if userns.RunningInUserNS() {
-					log.G(ctx).WithError(err).Debugf("failed to enable controllers (%v)", allControllers)
-				} else {
-					log.G(ctx).WithError(err).Errorf("failed to enable controllers (%v)", allControllers)
+	func() {
+		_, oomSpan := tracing.StartSpan(ctx, tracing.Name("shim", "container", "oom"))
+		defer oomSpan.End()
+		switch cg := container.Cgroup().(type) {
+		case cgroup1.Cgroup:
+			if err := s.cg1oom.Add(container.ID, cg); err != nil {
+				log.G(ctx).WithError(err).Error("add cg to OOM monitor")
+			}
+		case *cgroupsv2.Manager:
+			allControllers, err := cg.RootControllers()
+			if err != nil {
+				log.G(ctx).WithError(err).Error("failed to get root controllers")
+			} else {
+				if err := cg.ToggleControllers(allControllers, cgroupsv2.Enable); err != nil {
+					if userns.RunningInUserNS() {
+						log.G(ctx).WithError(err).Debugf("failed to enable controllers (%v)", allControllers)
+					} else {
+						log.G(ctx).WithError(err).Errorf("failed to enable controllers (%v)", allControllers)
+					}
 				}
 			}
-		}
 
-		if err := s.cg2oom.Add(container.ID, container.Pid(), s.oomEvent); err != nil {
-			log.G(ctx).WithError(err).WithField("container_id", container.ID).Error("failed to watch oom events")
+			if err := s.cg2oom.Add(container.ID, container.Pid(), s.oomEvent); err != nil {
+				log.G(ctx).WithError(err).WithField("container_id", container.ID).Error("failed to watch oom events")
+			}
 		}
-	}
+	}()
 
 	// The following line cannot return an error as the only state in which that
 	// could happen would also cause the container.Pid() call above to

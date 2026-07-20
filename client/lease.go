@@ -60,7 +60,15 @@ func (c *Client) WithLease(ctx context.Context, opts ...leases.Opt) (context.Con
 	}
 
 	// Create under the WithLease span so lease RPC time is attributed here.
-	l, err := ls.Create(spanCtx, opts...)
+	var (
+		l   leases.Lease
+		err error
+	)
+	func() {
+		cctx, createSpan := tracing.StartSpan(spanCtx, tracing.Name("client", "WithLease", "create"))
+		defer createSpan.End()
+		l, err = ls.Create(cctx, opts...)
+	}()
 	if err != nil {
 		span.SetStatus(err)
 		span.SetAttributes(tracing.Attribute("lease.action", "create"))
